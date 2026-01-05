@@ -1,69 +1,89 @@
-﻿import sqlite3
+import sqlite3
 from datetime import datetime
-from typing import Optional, Dict, Any
+
+conn = sqlite3.connect("invoices.db", check_same_thread=False)
+c = conn.cursor()
+
+# Create table
+c.execute("""CREATE TABLE IF NOT EXISTS invoices (
+    invoice_id TEXT PRIMARY KEY,
+    key TEXT,
+    bound_user TEXT,
+    bound_at TEXT,
+    created_at TEXT
+)""")
+conn.commit()
 
 
-class Database:
-    def __init__(self, path: str = "data.db"):
-        self.path = path
-        self.conn = sqlite3.connect(self.path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._init_db()
+class DB:
 
-    def _init_db(self) -> None:
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS invoices (
-                invoice_id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                key TEXT NOT NULL,
-                bound_user_id INTEGER,
-                bound_username TEXT,
-                bound_at TEXT
-            )
-            """
-        )
-        self.conn.commit()
-
-    def create_invoice(self, invoice_id: str, key: str) -> bool:
-        now = datetime.utcnow().isoformat()
-        try:
-            cur = self.conn.cursor()
-            cur.execute(
-                "INSERT INTO invoices (invoice_id, created_at, key) VALUES (?, ?, ?)",
-                (invoice_id, now, key),
-            )
-            self.conn.commit()
-            return True
-        except sqlite3.IntegrityError:
+    def create_invoice(self, invoice_id, key):
+        c.execute("SELECT * FROM invoices WHERE invoice_id=?", (invoice_id, ))
+        if c.fetchone():
             return False
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO invoices VALUES (?, ?, ?, ?, ?)",
+                  (invoice_id, key, None, None, now))
+        conn.commit()
+        return True
 
-    def get_invoice(self, invoice_id: str) -> Optional[Dict[str, Any]]:
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM invoices WHERE invoice_id = ?", (invoice_id,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return dict(row)
-
-    def bind_invoice(self, invoice_id: str, user_id: int, username: str) -> Dict[str, Any]:
-        cur = self.conn.cursor()
-        row = cur.execute("SELECT * FROM invoices WHERE invoice_id = ?", (invoice_id,)).fetchone()
+    def bind_invoice(self, invoice_id, user_id, username):
+        c.execute("SELECT * FROM invoices WHERE invoice_id=?", (invoice_id, ))
+        row = c.fetchone()
         if not row:
             return {"ok": False, "error": "not_found"}
-        if row["bound_user_id"] is not None:
-            return {"ok": False, "error": "already_bound", "invoice": dict(row)}
-        now = datetime.utcnow().isoformat()
-        cur.execute(
-            "UPDATE invoices SET bound_user_id = ?, bound_username = ?, bound_at = ? WHERE invoice_id = ?",
-            (user_id, username, now, invoice_id),
-        )
-        self.conn.commit()
-        return {"ok": True, "invoice": self.get_invoice(invoice_id)}
+        if row[2]:
+            return {
+                "ok": False,
+                "error": "already_bound",
+                "invoice": {
+                    "bound_username": row[2],
+                    "bound_at": row[3]
+                }
+            }
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(
+            "UPDATE invoices SET bound_user=?, bound_at=? WHERE invoice_id=?",
+            (username, now, invoice_id))
+        conn.commit()
+        return {
+            "ok": True,
+            "invoice": {
+                "invoice_id": invoice_id,
+                "bound_username": username,
+                "bound_at": now,
+                "key": row[1],
+                "created_at": row[4]
+            }
+        }
+
+    def get_invoice(self, invoice_id):
+        c.execute("SELECT * FROM invoices WHERE invoice_id=?", (invoice_id, ))
+        row = c.fetchone()
+        if not row:
+            return None
+        return {
+            "invoice_id": row[0],
+            "key": row[1],
+            "bound_username": row[2],
+            "bound_at": row[3],
+            "created_at": row[4]
+        }
+
+    def delete_invoice(self, invoice_id):
+        c.execute("DELETE FROM invoices WHERE invoice_id=?", (invoice_id, ))
+        conn.commit()
+        return c.rowcount > 0
+
+    def update_invoice(self, invoice_id, key):
+        c.execute("UPDATE invoices SET key=? WHERE invoice_id=?",
+                  (key, invoice_id))
+        conn.commit()
+        return c.rowcount > 0
+
+    def list_invoices(self):
+        c.execute("SELECT * FROM invoices")
+        return c.fetchall()
 
 
-db = Database()
-
-if __name__ == "__main__":
-    print("DB initialized at data.db")
+db = DB()
